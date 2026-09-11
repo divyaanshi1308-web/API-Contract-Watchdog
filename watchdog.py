@@ -1,14 +1,30 @@
 import json
 import hashlib
 import requests
+import os
+import smtplib
 
+from email.message import EmailMessage
+from dotenv import load_dotenv
 from datetime import datetime
+
 
 CONFIG_FILE = "config.json"
 BASELINE_FILE = "baseline.json"
 HISTORY_FILE = "history.json"
 
 
+load_dotenv()
+
+EMAIL_SENDER = os.getenv("EMAIL_SENDER")
+EMAIL_PASSWORD = os.getenv("EMAIL_PASSWORD")
+EMAIL_RECEIVER = os.getenv("EMAIL_RECEIVER")
+
+if not EMAIL_SENDER or not EMAIL_PASSWORD or not EMAIL_RECEIVER:
+    print("✗ Email configuration is missing.")
+    print("Please check your .env file.")
+    exit()
+    
 def load_config():
     with open(CONFIG_FILE, "r") as file:
         return json.load(file)
@@ -48,13 +64,29 @@ def extract_schema(data, prefix=""):
 
 
 def get_api_schema(url):
-    response = requests.get(url)
+    try:
+        response = requests.get(
+            url,
+            timeout=10
+        )
 
-    response.raise_for_status()
+        response.raise_for_status()
 
-    data = response.json()
+        data = response.json()
 
-    return extract_schema(data)
+        return extract_schema(data)
+
+    except requests.exceptions.Timeout:
+        print("✗ API request timed out.")
+        return None
+
+    except requests.exceptions.RequestException as error:
+        print(f"✗ API request failed: {error}")
+        return None
+
+    except ValueError:
+        print("✗ API returned invalid JSON.")
+        return None
 
 
 def load_baseline():
@@ -65,6 +97,7 @@ def load_baseline():
 def save_baseline(schema):
     with open(BASELINE_FILE, "w") as file:
         json.dump(schema, file, indent=4)
+
 
 def save_history(status, severity, fingerprint):
     entry = {
@@ -85,7 +118,42 @@ def save_history(status, severity, fingerprint):
 
     with open(HISTORY_FILE, "w") as file:
         json.dump(history, file, indent=4)
-        
+
+
+def send_email_alert(subject, body):
+    message = EmailMessage()
+
+    message["Subject"] = subject
+    message["From"] = EMAIL_SENDER
+    message["To"] = EMAIL_RECEIVER
+
+    message.set_content(body)
+
+    with smtplib.SMTP_SSL(
+        "smtp.gmail.com",
+        465
+    ) as server:
+
+        server.login(
+            EMAIL_SENDER,
+            EMAIL_PASSWORD
+        )
+
+        server.send_message(message)
+
+def should_send_alert(current_fingerprint):
+    try:
+        with open(HISTORY_FILE, "r") as file:
+            history = json.load(file)
+    except FileNotFoundError:
+        return True
+
+    for entry in reversed(history):
+        if entry["severity"] == "HIGH":
+            return entry["fingerprint"] != current_fingerprint
+
+    return True
+
 def generate_fingerprint(schema):
     schema_string = json.dumps(
         schema,
@@ -139,6 +207,11 @@ url = config["url"]
 # Fetch current API schema
 current_schema = get_api_schema(url)
 
+if current_schema is None:
+    exit()
+
+
+# Generate current fingerprint
 current_fingerprint = generate_fingerprint(
     current_schema
 )
@@ -181,6 +254,34 @@ severity = determine_severity(
     type_changed
 )
 
+# Send alert before saving the current check
+if severity == "HIGH" and should_send_alert(current_fingerprint):
+    send_email_alert(
+        "API Contract Watchdog - HIGH Severity Change",
+        f"""
+API contract change detected.
+
+API:
+{url}
+
+Severity:
+HIGH
+
+Removed fields:
+{removed}
+
+Type changes:
+{type_changed}
+
+Current fingerprint:
+{current_fingerprint}
+
+Please review the API contract.
+"""
+    )
+    print("✓ HIGH severity alert email sent successfully.")
+
+# Save check history
 status = "OK" if severity == "OK" else "CHANGED"
 
 save_history(
@@ -188,7 +289,8 @@ save_history(
     severity,
     current_fingerprint
 )
-
+        
+# Display result
 print("API CONTRACT WATCHDOG")
 print("---------------------")
 
