@@ -1,6 +1,6 @@
 # API Contract Watchdog
 
-> **V2 Model **
+> **V2 Model — Advanced API Contract Monitoring**
 
 ## V2 Features
 
@@ -15,7 +15,7 @@
 - Maintains local change history
 - Automatically creates the baseline on the first run
 
-```
+---
 
 ## Project Structure & File Responsibilities
 
@@ -29,4 +29,8 @@
 | `.gitignore` | Prevents unnecessary and runtime-generated files from being committed |
 | `README.md` | Project documentation |
 
-``` 
+---
+
+## Author
+
+**Divyaanshi Maheshwari**
