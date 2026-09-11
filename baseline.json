@@ -1,0 +1,6 @@
+{
+    "date": "str",
+    "base": "str",
+    "quote": "str",
+    "rate": "float"
+}
