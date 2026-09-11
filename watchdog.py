@@ -1,22 +1,60 @@
 import json
+import hashlib
 import requests
 
-URL = "https://api.frankfurter.dev/v2/rate/USD/INR"
+from datetime import datetime
+
+CONFIG_FILE = "config.json"
 BASELINE_FILE = "baseline.json"
+HISTORY_FILE = "history.json"
 
 
-def get_api_schema():
-    response = requests.get(URL)
+def load_config():
+    with open(CONFIG_FILE, "r") as file:
+        return json.load(file)
+
+
+def extract_schema(data, prefix=""):
+    schema = {}
+
+    if isinstance(data, dict):
+
+        for key, value in data.items():
+
+            field_name = f"{prefix}.{key}" if prefix else key
+
+            if isinstance(value, dict):
+                schema[field_name] = "dict"
+
+                schema.update(
+                    extract_schema(value, field_name)
+                )
+
+            elif isinstance(value, list):
+                schema[field_name] = "list"
+
+                if value:
+                    schema.update(
+                        extract_schema(
+                            value[0],
+                            f"{field_name}[]"
+                        )
+                    )
+
+            else:
+                schema[field_name] = type(value).__name__
+
+    return schema
+
+
+def get_api_schema(url):
+    response = requests.get(url)
+
     response.raise_for_status()
 
     data = response.json()
 
-    schema = {}
-
-    for key, value in data.items():
-        schema[key] = type(value).__name__
-
-    return schema
+    return extract_schema(data)
 
 
 def load_baseline():
@@ -28,6 +66,36 @@ def save_baseline(schema):
     with open(BASELINE_FILE, "w") as file:
         json.dump(schema, file, indent=4)
 
+def save_history(status, severity, fingerprint):
+    entry = {
+        "timestamp": datetime.now().isoformat(),
+        "status": status,
+        "severity": severity,
+        "fingerprint": fingerprint
+    }
+
+    try:
+        with open(HISTORY_FILE, "r") as file:
+            history = json.load(file)
+
+    except FileNotFoundError:
+        history = []
+
+    history.append(entry)
+
+    with open(HISTORY_FILE, "w") as file:
+        json.dump(history, file, indent=4)
+        
+def generate_fingerprint(schema):
+    schema_string = json.dumps(
+        schema,
+        sort_keys=True
+    )
+
+    return hashlib.sha256(
+        schema_string.encode()
+    ).hexdigest()
+
 
 def compare_schemas(baseline, current):
     added = []
@@ -35,6 +103,7 @@ def compare_schemas(baseline, current):
     type_changed = []
 
     for key in current:
+
         if key not in baseline:
             added.append(key)
 
@@ -44,6 +113,7 @@ def compare_schemas(baseline, current):
             )
 
     for key in baseline:
+
         if key not in current:
             removed.append(key)
 
@@ -51,6 +121,7 @@ def compare_schemas(baseline, current):
 
 
 def determine_severity(added, removed, type_changed):
+
     if removed or type_changed:
         return "HIGH"
 
@@ -60,21 +131,40 @@ def determine_severity(added, removed, type_changed):
     return "OK"
 
 
-current_schema = get_api_schema()
+# Load API configuration
+config = load_config()
+url = config["url"]
+
+
+# Fetch current API schema
+current_schema = get_api_schema(url)
+
+current_fingerprint = generate_fingerprint(
+    current_schema
+)
+
 
 # First run
 try:
     baseline_schema = load_baseline()
 
 except FileNotFoundError:
+
     save_baseline(current_schema)
 
     print("API CONTRACT WATCHDOG")
     print("---------------------")
     print("✓ First run detected")
     print("✓ Baseline created successfully")
+    print(f"Fingerprint: {current_fingerprint}")
 
     exit()
+
+
+# Generate baseline fingerprint
+baseline_fingerprint = generate_fingerprint(
+    baseline_schema
+)
 
 
 # Compare current API with baseline
@@ -83,35 +173,58 @@ added, removed, type_changed = compare_schemas(
     current_schema
 )
 
+
+# Determine severity
 severity = determine_severity(
     added,
     removed,
     type_changed
 )
 
+status = "OK" if severity == "OK" else "CHANGED"
+
+save_history(
+    status,
+    severity,
+    current_fingerprint
+)
+
 print("API CONTRACT WATCHDOG")
 print("---------------------")
 
+print(f"Baseline fingerprint: {baseline_fingerprint}")
+print(f"Current fingerprint:  {current_fingerprint}")
+
+
 if severity == "OK":
-    print("✓ API CONTRACT: OK")
+
+    print("\n✓ API CONTRACT: OK")
 
 else:
-    print(f"✗ API CONTRACT: CHANGED")
+
+    print("\n✗ API CONTRACT: CHANGED")
     print(f"Severity: {severity}")
 
     if added:
+
         print("\nAdded fields:")
+
         for field in added:
             print(f"  + {field}")
 
     if removed:
+
         print("\nRemoved fields:")
+
         for field in removed:
             print(f"  - {field}")
 
     if type_changed:
+
         print("\nType changes:")
+
         for field, old_type, new_type in type_changed:
+
             print(
                 f"  ~ {field}: "
                 f"{old_type} → {new_type}"
