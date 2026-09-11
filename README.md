@@ -154,9 +154,7 @@ Please review the API contract.
 
 ### Email Alert Screenshot
 
-```markdown
 ![API Contract Watchdog Email Alert](screenshots/email-alert.png)
-```
 
 ---
 
